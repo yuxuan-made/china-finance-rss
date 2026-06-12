@@ -21,10 +21,11 @@ import re
 import signal
 import sys
 import urllib.request
+import hashlib
 from html import unescape
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.request import Request, urlopen
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 from datetime import datetime, timedelta, timezone
 from time import time
 from email.utils import formatdate
@@ -82,6 +83,37 @@ def strip_html(text):
     """Strip simple HTML tags from upstream snippets."""
     text = re.sub(r'<[^>]+>', '', str(text or ''))
     return unescape(re.sub(r'\s+', ' ', text)).strip()
+
+
+def cls_serialize_sign_value(value, key):
+    """Serialize a value the same way the CLS frontend signs params."""
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        return f'{key}={value}'
+    if isinstance(value, list):
+        if not value:
+            return f'{key}[]'
+        return '&'.join(filter(None, (
+            cls_serialize_sign_value(item, f'{key}[{index}]')
+            for index, item in enumerate(value)
+        )))
+    if isinstance(value, dict):
+        return '&'.join(filter(None, (
+            cls_serialize_sign_value(value[item_key], f'{key}[{item_key}]')
+            for item_key in sorted(value, key=lambda item: str(item).upper())
+        )))
+    return None
+
+
+def cls_sign_params(params):
+    """Sign CLS request params using the public web frontend algorithm."""
+    serialized = '&'.join(filter(None, (
+        cls_serialize_sign_value(params[key], key)
+        for key in sorted(params, key=lambda item: str(item).upper())
+    )))
+    sha1_digest = hashlib.sha1(serialized.encode('utf-8')).hexdigest()
+    return hashlib.md5(sha1_digest.encode('utf-8')).hexdigest()
 
 
 def extract_jin10_public_app_id(bundle_text):
@@ -150,6 +182,21 @@ def generate_rss(title, link, description, items, feed_url=None):
 
     xml += '</channel>\n</rss>'
     return xml
+
+
+def parse_cls_items(payload):
+    """Convert CLS roll_data payload into RSS item dictionaries."""
+    items = []
+    for item in payload.get('data', {}).get('roll_data', []):
+        item_id = item.get('id', '')
+        items.append({
+            'title': item.get('brief') or item.get('content', '')[:100],
+            'link': f'https://www.cls.cn/telegraph/{item_id}',
+            'description': item.get('content', ''),
+            'pubDate': timestamp_to_rfc822(item.get('ctime', 0)),
+            'guid': f'cls_{item_id}',
+        })
+    return items
 
 
 def parse_jin10_items(payload):
@@ -235,26 +282,25 @@ def generate_opml(base_url):
 
 def handle_cls_telegraph(feed_url=None):
     """CLS Telegraph (财联社电报) - Real-time financial news flashes."""
-    url = 'https://www.cls.cn/nodeapi/telegraphList?app=CailianpressWeb&os=web&sv=8.4.6&rn=50&last_time=0'
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    url = 'https://www.cls.cn/v1/roll/get_roll_list'
+    params = {
+        'refresh_type': 1,
+        'rn': 50,
+        'last_time': 0,
+        'os': 'web',
+        'sv': '8.7.9',
+        'app': 'CailianpressWeb',
+    }
+    params['sign'] = cls_sign_params(params)
+    headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.cls.cn/telegraph'}
 
-    data = json.loads(fetch_json(url, headers))
-    items = []
-
-    for item in data.get('data', {}).get('roll_data', []):
-        items.append({
-            'title': item.get('brief', item.get('content', ''))[:100],
-            'link': f"https://www.cls.cn/telegraph/{item['id']}",
-            'description': item.get('content', ''),
-            'pubDate': timestamp_to_rfc822(item.get('ctime', 0)),
-            'guid': f"cls_{item['id']}"
-        })
+    data = json.loads(fetch_json(f'{url}?{urlencode(params)}', headers))
 
     return generate_rss(
         '财联社电报',
         'https://www.cls.cn/telegraph',
         '财联社实时快讯',
-        items,
+        parse_cls_items(data),
         feed_url=feed_url
     )
 

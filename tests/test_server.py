@@ -67,6 +67,40 @@ class TimeParsingTests(unittest.TestCase):
 
 
 class SourceParserTests(unittest.TestCase):
+    def test_cls_sign_params_matches_frontend_sha1_then_md5_signature(self):
+        params = {
+            "refresh_type": 1,
+            "rn": 20,
+            "last_time": 0,
+            "os": "web",
+            "sv": "8.7.9",
+            "app": "CailianpressWeb",
+        }
+
+        self.assertEqual(
+            server.cls_sign_params(params),
+            "e11ef7d616d8f9a2f056e6df1aefc4d4",
+        )
+
+    def test_parse_cls_items_maps_roll_data(self):
+        payload = {
+            "data": {
+                "roll_data": [{
+                    "id": 123,
+                    "ctime": 1781278243,
+                    "brief": "LME期铜收涨216美元",
+                    "content": "财联社6月13日电，LME期铜收涨216美元。",
+                }]
+            }
+        }
+
+        items = server.parse_cls_items(payload)
+
+        self.assertEqual(items[0]["title"], "LME期铜收涨216美元")
+        self.assertEqual(items[0]["description"], "财联社6月13日电，LME期铜收涨216美元。")
+        self.assertEqual(items[0]["link"], "https://www.cls.cn/telegraph/123")
+        self.assertEqual(items[0]["guid"], "cls_123")
+
     def test_extract_jin10_public_app_id_from_frontend_bundle(self):
         bundle = 'headers:{"x-app-id":"public-web-app-id","x-version":t,handleError:!0}'
 
